@@ -1,0 +1,22 @@
+{
+  "localnet": {
+    "securityTokenProgram": null,
+    "transferHookProgram": null,
+    "transferWhitelistProgram": null
+  },
+  "devnet": {
+    "securityTokenProgram": "SSTS8Qk2bW3aVaBEsY1Ras95YdbaaYQQx21JWHxvjap",
+    "transferHookProgram": "HookXqLKgPaNrHBJ9Jui7oQZz93vMbtA88JjsLa8bmfL",
+    "transferWhitelistProgram": null
+  },
+  "testnet": {
+    "securityTokenProgram": null,
+    "transferHookProgram": null,
+    "transferWhitelistProgram": null
+  },
+  "mainnet": {
+    "securityTokenProgram": null,
+    "transferHookProgram": null,
+    "transferWhitelistProgram": null
+  }
+}
