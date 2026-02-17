@@ -131,6 +131,10 @@ The e2e suite is split into named tests and covers:
 - Change `config/program-ids.json` values after final program deployments.
 - Replace vendored `clients/` with published client packages once available.
 
+## Contributing
+
+Contributions are welcome. See `CONTRIBUTING.md` for setup, validation checks, and pull request guidelines.
+
 ## License
 
 MIT. See `LICENSE.md`.
