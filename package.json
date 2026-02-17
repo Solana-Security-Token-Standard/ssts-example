@@ -8,6 +8,10 @@
     "build": "./scripts/build.sh",
     "deploy:verification": "./scripts/deploy-verification.sh",
     "issuer:setup": "./scripts/issuer-setup.sh",
+    "format": "./scripts/format.sh",
+    "format:check": "./scripts/format-check.sh",
+    "clippy": "./scripts/clippy.sh",
+    "audit": "./scripts/audit.sh",
     "test": "./scripts/test.sh",
     "test:unit": "./scripts/test-unit.sh",
     "test:e2e": "./scripts/test-e2e.sh"

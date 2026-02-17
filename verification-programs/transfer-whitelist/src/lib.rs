@@ -6,6 +6,8 @@
 //! without that context are rejected with NotEnoughAccountKeys.
 
 use pinocchio::account_info::AccountInfo;
+#[cfg(not(feature = "no-entrypoint"))]
+use pinocchio::entrypoint;
 use pinocchio::instruction::{Seed, Signer};
 use pinocchio::program_error::ProgramError;
 use pinocchio::pubkey::{find_program_address, Pubkey, PUBKEY_BYTES};
@@ -14,8 +16,6 @@ use pinocchio::sysvars::Sysvar;
 use pinocchio::ProgramResult;
 use pinocchio_log::log;
 use pinocchio_system::instructions::CreateAccount;
-#[cfg(not(feature = "no-entrypoint"))]
-use pinocchio::entrypoint;
 
 const MINT_DISCRIMINATOR: u8 = 6;
 const TRANSFER_DISCRIMINATOR: u8 = 12;
@@ -64,16 +64,12 @@ impl WhitelistConfig {
         let admin_bytes: [u8; PUBKEY_BYTES] = data[1..1 + PUBKEY_BYTES]
             .try_into()
             .map_err(|_| ProgramError::InvalidAccountData)?;
-        let admin = Pubkey::from(
-            admin_bytes,
-        );
-        let mint_bytes: [u8; PUBKEY_BYTES] =
-            data[1 + PUBKEY_BYTES..1 + PUBKEY_BYTES + PUBKEY_BYTES]
-                .try_into()
-                .map_err(|_| ProgramError::InvalidAccountData)?;
-        let mint = Pubkey::from(
-            mint_bytes,
-        );
+        let admin = Pubkey::from(admin_bytes);
+        let mint_bytes: [u8; PUBKEY_BYTES] = data
+            [1 + PUBKEY_BYTES..1 + PUBKEY_BYTES + PUBKEY_BYTES]
+            .try_into()
+            .map_err(|_| ProgramError::InvalidAccountData)?;
+        let mint = Pubkey::from(mint_bytes);
         let bump = data[Self::LEN - 1];
         Ok(Self {
             discriminator,
@@ -115,9 +111,7 @@ impl WhitelistEntry {
         let owner_bytes: [u8; PUBKEY_BYTES] = data[1..1 + PUBKEY_BYTES]
             .try_into()
             .map_err(|_| ProgramError::InvalidAccountData)?;
-        let owner = Pubkey::from(
-            owner_bytes,
-        );
+        let owner = Pubkey::from(owner_bytes);
         let active = data[1 + PUBKEY_BYTES];
         let bump = data[Self::LEN - 1];
         Ok(Self {
@@ -227,7 +221,11 @@ fn add_to_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
     }
 
     let (expected_entry, bump) = find_program_address(
-        &[ENTRY_SEED, config.key().as_ref(), token_account.key().as_ref()],
+        &[
+            ENTRY_SEED,
+            config.key().as_ref(),
+            token_account.key().as_ref(),
+        ],
         program_id,
     );
     if expected_entry != *entry.key() {
@@ -292,7 +290,11 @@ fn remove_from_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> Progr
     }
 
     let (expected_entry, _bump) = find_program_address(
-        &[ENTRY_SEED, config.key().as_ref(), token_account.key().as_ref()],
+        &[
+            ENTRY_SEED,
+            config.key().as_ref(),
+            token_account.key().as_ref(),
+        ],
         program_id,
     );
     if expected_entry != *entry.key() {
@@ -347,7 +349,11 @@ fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResu
 
     for destination in destination_candidates.into_iter().flatten() {
         let (expected_entry, _bump) = find_program_address(
-            &[ENTRY_SEED, config.key().as_ref(), destination.key().as_ref()],
+            &[
+                ENTRY_SEED,
+                config.key().as_ref(),
+                destination.key().as_ref(),
+            ],
             program_id,
         );
         if let Some(found) = accounts.iter().find(|acc| acc.key() == &expected_entry) {

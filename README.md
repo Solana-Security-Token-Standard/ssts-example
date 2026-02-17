@@ -96,6 +96,10 @@ CLI flags override `.env` values.
 | `npm run build`               | Build verification programs                   |
 | `npm run deploy:verification` | Deploy verification programs                  |
 | `npm run issuer:setup`        | Initialize issuer mint/config/whitelist state |
+| `npm run format`              | Format Rust verifier code                     |
+| `npm run format:check`        | Check Rust formatting                         |
+| `npm run clippy`              | Run clippy on Rust verifier code              |
+| `npm run audit`               | Run cargo-audit for verifier dependencies     |
 | `npm run test:unit`           | Run Rust verifier unit tests + TS non-e2e     |
 | `npm run test:e2e`            | Run chain-state end-to-end tests              |
 | `npm test`                    | Run `test:unit` then `test:e2e`               |
