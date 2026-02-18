@@ -3,7 +3,7 @@ name = "security-token-client"
 version = "1.0.0"
 description = "Rust client for the Solana Security Token"
 authors = ["SSTS Foundation"]
-repository = "https://github.com/hoodieshq/security-token"
+repository = "https://github.com/Solana-Security-Token-Standard/solana-security-token-standard"
 license = "Apache-2.0"
 edition = "2021"
 

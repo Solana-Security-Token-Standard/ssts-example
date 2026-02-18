@@ -9,7 +9,7 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
-  "author": "Hoodies",
+  "author": "SSTS Foundation",
   "license": "Apache-2.0",
   "dependencies": {
     "@solana/kit": "^2.1.0"
