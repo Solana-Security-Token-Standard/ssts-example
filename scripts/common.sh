@@ -69,6 +69,11 @@ load_program_ids() {
 }
 
 cluster_url() {
+  if [ -n "${SOLANA_RPC_URL:-}" ]; then
+    echo "${SOLANA_RPC_URL}"
+    return
+  fi
+
   case "$1" in
     localnet)
       echo "http://127.0.0.1:8899"

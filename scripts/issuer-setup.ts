@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import {
   AccountRole,
   type Address,
-  appendTransactionMessageInstruction,
+  appendTransactionMessageInstructions,
   address,
+  type Rpc,
+  type SolanaRpcApi,
   createKeyPairSignerFromBytes,
   createSolanaRpc,
   createTransactionMessage,
@@ -87,6 +89,7 @@ const INSTRUCTION_DISCRIMINATORS = {
 const WHITELIST_DISCRIMINATORS = {
   initialize: 200,
   add: 201,
+  remove: 202,
 } as const;
 
 // Well-known addresses used by the setup flow.
@@ -110,6 +113,12 @@ type KitInstructionBuilder = (
   input: Record<string, unknown>,
   config?: { programAddress?: string },
 ) => KitInstruction;
+
+type SolanaRpcClient = Rpc<SolanaRpcApi>;
+
+type AccountInfoValue = Readonly<{
+  executable: boolean;
+}> | null;
 
 // Generated client modules are CommonJS-shaped at runtime under tsx in this repo layout.
 // This helper normalizes both ESM-style and CJS-style exports.
@@ -269,6 +278,10 @@ function resolveCluster(): Cluster {
 }
 
 function clusterUrl(cluster: Cluster): string {
+  const override = process.env.SOLANA_RPC_URL?.trim();
+  if (override) {
+    return override;
+  }
   if (cluster === "localnet") {
     return "http://127.0.0.1:8899";
   }
@@ -402,18 +415,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function getAccountInfoOrNull(rpc: any, accountAddress: Address): Promise<any> {
+async function getAccountInfoOrNull(
+  rpc: SolanaRpcClient,
+  accountAddress: Address,
+): Promise<AccountInfoValue> {
   const response = await rpc
     .getAccountInfo(accountAddress, {
       commitment: "confirmed",
       encoding: "base64",
     })
     .send();
-  return response.value;
+  return response.value as AccountInfoValue;
 }
 
 async function waitForSignatureConfirmation(
-  rpc: any,
+  rpc: SolanaRpcClient,
   signature: Signature,
   timeoutMs: number,
 ): Promise<void> {
@@ -448,7 +464,7 @@ type SendTransactionWithoutConfirming = ReturnType<
 
 // Sends a signed transaction and waits until confirmed commitment using RPC polling.
 async function sendTx(
-  rpc: any,
+  rpc: SolanaRpcClient,
   sendTransaction: SendTransactionWithoutConfirming,
   payerSigner: KeyPairSigner,
   instructions: Instruction[],
@@ -457,22 +473,19 @@ async function sendTx(
     .getLatestBlockhash({ commitment: "confirmed" })
     .send();
 
-  let transactionMessage: any = createTransactionMessage({ version: "legacy" });
-  transactionMessage = setTransactionMessageFeePayerSigner(
+  const transactionMessageWithPayer = setTransactionMessageFeePayerSigner(
     payerSigner,
-    transactionMessage,
+    createTransactionMessage({ version: "legacy" }),
   );
-  transactionMessage = setTransactionMessageLifetimeUsingBlockhash(
+  const transactionMessageWithLifetime = setTransactionMessageLifetimeUsingBlockhash(
     latestBlockhash,
-    transactionMessage,
+    transactionMessageWithPayer,
   );
 
-  for (const instruction of instructions) {
-    transactionMessage = appendTransactionMessageInstruction(
-      instruction,
-      transactionMessage,
-    );
-  }
+  const transactionMessage = appendTransactionMessageInstructions(
+    instructions,
+    transactionMessageWithLifetime,
+  );
 
   const signedTransaction =
     await signTransactionMessageWithSigners(transactionMessage);
@@ -485,7 +498,7 @@ async function sendTx(
 
 // Sanity check: fail before setup if a provided program id does not exist or is not executable.
 async function ensureProgramExecutable(
-  rpc: any,
+  rpc: SolanaRpcClient,
   programAddress: Address,
 ): Promise<void> {
   const info = await getAccountInfoOrNull(rpc, programAddress);
@@ -583,7 +596,7 @@ async function deriveAssociatedTokenAddress(
 
 // Creates ATA only when missing, so reruns are idempotent.
 async function ensureAssociatedTokenAccount(
-  rpc: any,
+  rpc: SolanaRpcClient,
   sendTransaction: SendTransactionWithoutConfirming,
   payerSigner: KeyPairSigner,
   mintAddress: Address,
@@ -608,7 +621,7 @@ async function ensureAssociatedTokenAccount(
 
 // Keeps payer funded on devnet/localnet. Never attempts airdrop on testnet/mainnet.
 async function maybeAirdrop(
-  rpc: any,
+  rpc: SolanaRpcClient,
   payerAddress: Address,
   cluster: Cluster,
   minimumBalanceSol: number,

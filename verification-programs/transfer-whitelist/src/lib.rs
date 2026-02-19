@@ -33,6 +33,19 @@ const REMOVE_DISCRIMINATOR: u8 = 202;
 const CONFIG_DISCRIMINATOR: u8 = 1;
 const ENTRY_DISCRIMINATOR: u8 = 2;
 
+#[repr(u32)]
+enum TransferWhitelistError {
+    InvalidMintOwner = 1,
+    MintMismatch = 2,
+    WhitelistEntryInactive = 3,
+}
+
+impl From<TransferWhitelistError> for ProgramError {
+    fn from(error: TransferWhitelistError) -> Self {
+        ProgramError::Custom(error as u32)
+    }
+}
+
 #[repr(C)]
 struct WhitelistConfig {
     discriminator: u8,
@@ -151,13 +164,16 @@ fn initialize_config(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRe
         return Err(ProgramError::MissingRequiredSignature);
     }
     if !payer.is_writable() || !config.is_writable() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(ProgramError::InvalidArgument);
+    }
+    if !mint.is_owned_by(&pinocchio_token_2022::ID) {
+        return Err(TransferWhitelistError::InvalidMintOwner.into());
     }
 
     let (expected_pda, bump) =
         find_program_address(&[CONFIG_SEED, mint.key().as_ref()], program_id);
     if expected_pda != *config.key() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(ProgramError::InvalidSeeds);
     }
 
     if config.data_len() > 0 {
@@ -208,7 +224,7 @@ fn add_to_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
         return Err(ProgramError::MissingRequiredSignature);
     }
     if !admin.is_writable() || !entry.is_writable() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(ProgramError::InvalidArgument);
     }
 
     if !config.is_owned_by(program_id) {
@@ -229,7 +245,7 @@ fn add_to_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
         program_id,
     );
     if expected_entry != *entry.key() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(ProgramError::InvalidSeeds);
     }
 
     if entry.data_len() == 0 {
@@ -277,7 +293,7 @@ fn remove_from_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> Progr
         return Err(ProgramError::MissingRequiredSignature);
     }
     if !entry.is_writable() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(ProgramError::InvalidArgument);
     }
 
     if !config.is_owned_by(program_id) || !entry.is_owned_by(program_id) {
@@ -298,7 +314,7 @@ fn remove_from_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> Progr
         program_id,
     );
     if expected_entry != *entry.key() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(ProgramError::InvalidSeeds);
     }
 
     let mut entry_state = WhitelistEntry::try_from_bytes(&entry.try_borrow_data()?)?;
@@ -326,6 +342,10 @@ fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResu
     let Some(mint) = accounts.get(1) else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+    if !mint.is_owned_by(&pinocchio_token_2022::ID) {
+        return Err(TransferWhitelistError::InvalidMintOwner.into());
+    }
+
     let (expected_config, _bump) =
         find_program_address(&[CONFIG_SEED, mint.key().as_ref()], program_id);
     let Some(config) = accounts.iter().find(|acc| acc.key() == &expected_config) else {
@@ -338,7 +358,7 @@ fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResu
 
     let config_state = WhitelistConfig::try_from_bytes(&config.try_borrow_data()?)?;
     if config_state.mint != *mint.key() {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(TransferWhitelistError::MintMismatch.into());
     }
 
     // Destination account index differs by invocation layout:
@@ -371,7 +391,7 @@ fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResu
 
     let entry_state = WhitelistEntry::try_from_bytes(&entry.try_borrow_data()?)?;
     if entry_state.active == 0 {
-        return Err(ProgramError::Custom(1));
+        return Err(TransferWhitelistError::WhitelistEntryInactive.into());
     }
 
     Ok(())
