@@ -391,7 +391,8 @@ impl<'a> VerifyTransferAccounts<'a> {
     /// index 3); otherwise → Transfer Hook CPI (destination at index 2). A missing entry for
     /// the resolved destination is an immediate error — there is no fallback.
     fn parse(accounts: &'a [AccountInfo]) -> Result<Self, ProgramError> {
-        let [_permanent_delegate_or_from, mint, from_or_dest, dest_or_authority, ..] = accounts else {
+        let [_permanent_delegate_or_from, mint, from_or_dest, dest_or_authority, ..] = accounts
+        else {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
         let destination = if dest_or_authority.is_owned_by(&pinocchio_token_2022::ID) {
