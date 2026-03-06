@@ -1,9 +1,9 @@
 //! Transfer Whitelist Verification Program
 //!
-//! This program implements the Security Token verification interface.
-//! It enforces a simple whitelist for transfers when extra whitelist
-//! accounts are provided in the transfer verification call. Calls
-//! without that context are rejected with NotEnoughAccountKeys.
+//! Implements the SSTS verification interface for transfer whitelisting.
+//! A transfer is approved only if the destination token account has an
+//! active whitelist entry. Calls without the required whitelist accounts
+//! are rejected.
 
 use pinocchio::account_info::AccountInfo;
 #[cfg(not(feature = "no-entrypoint"))]
@@ -70,20 +70,27 @@ impl WhitelistConfig {
         if data.len() < Self::LEN {
             return Err(ProgramError::InvalidAccountData);
         }
-        let discriminator = data[0];
+        let mut offset = 0;
+
+        let discriminator = data[offset];
+        offset += 1;
         if discriminator != CONFIG_DISCRIMINATOR {
             return Err(ProgramError::InvalidAccountData);
         }
-        let admin_bytes: [u8; PUBKEY_BYTES] = data[1..1 + PUBKEY_BYTES]
-            .try_into()
-            .map_err(|_| ProgramError::InvalidAccountData)?;
-        let admin = Pubkey::from(admin_bytes);
-        let mint_bytes: [u8; PUBKEY_BYTES] = data
-            [1 + PUBKEY_BYTES..1 + PUBKEY_BYTES + PUBKEY_BYTES]
-            .try_into()
-            .map_err(|_| ProgramError::InvalidAccountData)?;
-        let mint = Pubkey::from(mint_bytes);
-        let bump = data[Self::LEN - 1];
+
+        let admin = Pubkey::from(
+            <[u8; PUBKEY_BYTES]>::try_from(&data[offset..offset + PUBKEY_BYTES])
+                .map_err(|_| ProgramError::InvalidAccountData)?,
+        );
+        offset += PUBKEY_BYTES;
+
+        let mint = Pubkey::from(
+            <[u8; PUBKEY_BYTES]>::try_from(&data[offset..offset + PUBKEY_BYTES])
+                .map_err(|_| ProgramError::InvalidAccountData)?,
+        );
+        offset += PUBKEY_BYTES;
+
+        let bump = data[offset];
         Ok(Self {
             discriminator,
             admin,
@@ -117,16 +124,24 @@ impl WhitelistEntry {
         if data.len() < Self::LEN {
             return Err(ProgramError::InvalidAccountData);
         }
-        let discriminator = data[0];
+        let mut offset = 0;
+
+        let discriminator = data[offset];
+        offset += 1;
         if discriminator != ENTRY_DISCRIMINATOR {
             return Err(ProgramError::InvalidAccountData);
         }
-        let owner_bytes: [u8; PUBKEY_BYTES] = data[1..1 + PUBKEY_BYTES]
-            .try_into()
-            .map_err(|_| ProgramError::InvalidAccountData)?;
-        let owner = Pubkey::from(owner_bytes);
-        let active = data[1 + PUBKEY_BYTES];
-        let bump = data[Self::LEN - 1];
+
+        let owner = Pubkey::from(
+            <[u8; PUBKEY_BYTES]>::try_from(&data[offset..offset + PUBKEY_BYTES])
+                .map_err(|_| ProgramError::InvalidAccountData)?,
+        );
+        offset += PUBKEY_BYTES;
+
+        let active = data[offset];
+        offset += 1;
+
+        let bump = data[offset];
         Ok(Self {
             discriminator,
             owner,
@@ -233,7 +248,7 @@ fn add_to_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
 
     let config_state = WhitelistConfig::try_from_bytes(&config.try_borrow_data()?)?;
     if config_state.admin != *admin.key() {
-        return Err(ProgramError::MissingRequiredSignature);
+        return Err(ProgramError::InvalidArgument);
     }
 
     let (expected_entry, bump) = find_program_address(
@@ -246,6 +261,10 @@ fn add_to_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
     );
     if expected_entry != *entry.key() {
         return Err(ProgramError::InvalidSeeds);
+    }
+
+    if entry.data_len() > 0 && !entry.is_owned_by(program_id) {
+        return Err(ProgramError::IllegalOwner);
     }
 
     if entry.data_len() == 0 {
@@ -302,7 +321,7 @@ fn remove_from_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> Progr
 
     let config_state = WhitelistConfig::try_from_bytes(&config.try_borrow_data()?)?;
     if config_state.admin != *admin.key() {
-        return Err(ProgramError::MissingRequiredSignature);
+        return Err(ProgramError::InvalidArgument);
     }
 
     let (expected_entry, _bump) = find_program_address(
@@ -328,20 +347,65 @@ fn remove_from_whitelist(program_id: &Pubkey, accounts: &[AccountInfo]) -> Progr
     Ok(())
 }
 
-fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
-    // Supported call layouts:
-    // 1) SSTS introspection verification call
-    // 2) Transfer Hook CPI call
-    //
-    // The exact account order may differ between those paths, so we resolve
-    // required context accounts by PDA instead of relying on fixed positions.
-    if accounts.len() < 4 {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    }
+/// Parsed accounts for the verify_transfer instruction.
+///
+/// Two invocation layouts are supported. Both expose `mint` and `destination`
+/// at the same semantic positions; the struct hides the positional difference.
+///
+/// ## SSTS Introspection path
+/// Base accounts (provided by SSTS, guaranteed present via starts_with check):
+///   [0] permanent_delegate_authority
+///   [1] mint                          (Token-2022)
+///   [2] from                          (Token-2022 source token account)
+///   [3] to                            (Token-2022 destination token account)  ← destination
+///   [4] transfer_hook_program
+///   [5] token_program                 (Token-2022)
+/// Additional accounts (appended by the client, validated by this program):
+///   [6] whitelist_config              (PDA: ["whitelist-config", mint])
+///   [7] whitelist_entry               (PDA: ["whitelist-entry", config, to])
+///
+/// ## Transfer Hook CPI path
+/// Base accounts (standard SPL Transfer Hook layout, validated by Token-2022):
+///   [0] from                          (Token-2022 source token account)
+///   [1] mint                          (Token-2022)
+///   [2] to                            (Token-2022 destination token account)  ← destination
+///   [3] authority                     (transfer authority; NOT Token-2022 owned)
+/// Additional accounts (resolved via ExtraAccountMetaList, appended by Token-2022):
+///   [4] whitelist_config              (PDA: ["whitelist-config", mint])
+///   [5] whitelist_entry               (PDA: ["whitelist-entry", config, to])
+///
+/// ## SSTS CPI path (NOT supported)
+/// SSTS constructs the CPI call itself and passes only target_accounts
+/// (instruction accounts minus verification program IDs). The whitelist PDAs
+/// will never be present in that account list. Do not register this program
+/// as a verifier in CPI mode.
+struct VerifyTransferAccounts<'a> {
+    mint: &'a AccountInfo,
+    destination: &'a AccountInfo,
+}
 
-    let Some(mint) = accounts.get(1) else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
+impl<'a> VerifyTransferAccounts<'a> {
+    /// Parses the flat account slice into semantic names.
+    ///
+    /// Path detection: accounts[3] is Token-2022-owned → SSTS introspection (destination at
+    /// index 3); otherwise → Transfer Hook CPI (destination at index 2). A missing entry for
+    /// the resolved destination is an immediate error — there is no fallback.
+    fn parse(accounts: &'a [AccountInfo]) -> Result<Self, ProgramError> {
+        let [_permanent_delegate_or_from, mint, from_or_dest, dest_or_authority, ..] = accounts else {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        };
+        let destination = if dest_or_authority.is_owned_by(&pinocchio_token_2022::ID) {
+            dest_or_authority // SSTS introspection: accounts[3] = to
+        } else {
+            from_or_dest // Transfer Hook CPI: accounts[2] = to
+        };
+        Ok(Self { mint, destination })
+    }
+}
+
+fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let VerifyTransferAccounts { mint, destination } = VerifyTransferAccounts::parse(accounts)?;
+
     if !mint.is_owned_by(&pinocchio_token_2022::ID) {
         return Err(TransferWhitelistError::InvalidMintOwner.into());
     }
@@ -361,30 +425,18 @@ fn verify_transfer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResu
         return Err(TransferWhitelistError::MintMismatch.into());
     }
 
-    // Destination account index differs by invocation layout:
-    // - SSTS introspection: index 3
-    // - Transfer Hook CPI: index 2
-    let destination_candidates = [accounts.get(3), accounts.get(2)];
-    let mut entry: Option<&AccountInfo> = None;
-
-    for destination in destination_candidates.into_iter().flatten() {
-        let (expected_entry, _bump) = find_program_address(
-            &[
-                ENTRY_SEED,
-                config.key().as_ref(),
-                destination.key().as_ref(),
-            ],
-            program_id,
-        );
-        if let Some(found) = accounts.iter().find(|acc| acc.key() == &expected_entry) {
-            entry = Some(found);
-            break;
-        }
-    }
-
-    let Some(entry) = entry else {
+    let (expected_entry, _bump) = find_program_address(
+        &[
+            ENTRY_SEED,
+            config.key().as_ref(),
+            destination.key().as_ref(),
+        ],
+        program_id,
+    );
+    let Some(entry) = accounts.iter().find(|acc| acc.key() == &expected_entry) else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+
     if !entry.is_owned_by(program_id) {
         return Err(ProgramError::IllegalOwner);
     }
