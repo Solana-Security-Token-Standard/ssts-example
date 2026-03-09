@@ -28,6 +28,7 @@ cp .env.example .env
 Run these locally before opening a pull request:
 
 ```bash
+npm run typecheck
 npm run format:check
 npm run clippy
 npm run audit
@@ -44,7 +45,7 @@ CLUSTER=devnet npm run test:e2e
 
 1. Keep changes focused and small.
 2. Add or update tests for behavior changes.
-3. Update docs (`README.md`, script help text, or comments) when interfaces or workflow change.
+3. Update docs (`README.md`, `CONTRIBUTING.md`, script help text, or comments) when interfaces or workflow change.
 4. Describe what changed, why it changed, and how it was validated.
 
 ## Security Issues

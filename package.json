@@ -8,6 +8,7 @@
     "build": "./scripts/build.sh",
     "deploy:verification": "./scripts/deploy-verification.sh",
     "issuer:setup": "./scripts/issuer-setup.sh",
+    "typecheck": "tsc --noEmit",
     "format": "./scripts/format.sh",
     "format:check": "./scripts/format-check.sh",
     "clippy": "./scripts/clippy.sh",
@@ -19,7 +20,8 @@
   "dependencies": {
     "@solana/kit": "^2.3.0",
     "@solana/spl-token": "^0.4.14",
-    "@solana/web3.js": "^1.98.0"
+    "@solana/web3.js": "^1.98.0",
+    "@ssts-org/client": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
