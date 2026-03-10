@@ -25,9 +25,7 @@ import {
   type KeyPairSigner,
   type Signature,
 } from "@solana/kit";
-import * as initializeMintModule from "../clients/typescript/src/generated/instructions/initializeMint";
-import * as initializeVerificationConfigModule from "../clients/typescript/src/generated/instructions/initializeVerificationConfig";
-import * as mintModule from "../clients/typescript/src/generated/instructions/mint";
+import * as sstsClientModule from "@ssts-org/client";
 
 // Supported targets for this setup script. Keep this aligned with config/program-ids.json.
 type Cluster = "localnet" | "devnet" | "testnet" | "mainnet";
@@ -120,7 +118,7 @@ type AccountInfoValue = Readonly<{
   executable: boolean;
 }> | null;
 
-// Generated client modules are CommonJS-shaped at runtime under tsx in this repo layout.
+// Published generated client package is CommonJS-shaped at runtime under tsx.
 // This helper normalizes both ESM-style and CJS-style exports.
 function resolveClientModule(moduleObject: unknown): Record<string, unknown> {
   const moduleRecord = moduleObject as {
@@ -144,17 +142,17 @@ function requireInstructionBuilder(
 
 // Core SSTS generated instruction builders used by this script.
 const getInitializeMintInstruction = requireInstructionBuilder(
-  initializeMintModule,
+  sstsClientModule,
   "getInitializeMintInstruction",
 );
 
 const getInitializeVerificationConfigInstruction = requireInstructionBuilder(
-  initializeVerificationConfigModule,
+  sstsClientModule,
   "getInitializeVerificationConfigInstruction",
 );
 
 const getMintInstruction = requireInstructionBuilder(
-  mintModule,
+  sstsClientModule,
   "getMintInstruction",
 );
 

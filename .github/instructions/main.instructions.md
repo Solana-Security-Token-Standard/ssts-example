@@ -21,7 +21,7 @@ This repo demonstrates issuer-side usage of deployed SSTS core programs:
 - Bash entrypoints in `scripts/`
 - TypeScript for setup logic and tests
 - Rust for verification programs
-- Vendored generated clients in `clients/` (temporary, until published packages are adopted)
+- Published generated clients consumed from npm (`@ssts-org/client`)
 
 ## Key Paths
 
@@ -37,4 +37,4 @@ This repo demonstrates issuer-side usage of deployed SSTS core programs:
 - Do not hardcode deployment-specific IDs in code.
 - Keep bash scripts as user-facing entrypoints; use TypeScript for complex transaction assembly.
 - Keep scripts fail-fast with actionable error messages.
-- If behavior or script flags change, update `README.md` in the same change.
+- If behavior or script flags change, update `README.md` and related docs in the same change.

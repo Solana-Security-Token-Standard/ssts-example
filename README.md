@@ -15,17 +15,15 @@ The core SSTS programs are expected to already be deployed. This repo focuses on
 
 - issuer setup automation (`scripts/issuer-setup.ts`, pure `@solana/kit`)
 - custom verification program (`verification-programs/transfer-whitelist`)
+- published TypeScript SSTS client package (`@ssts-org/client`)
 - end-to-end tests (`tests/e2e`)
-
-The `clients/` folder is currently copied from core and used locally until published packages are available.
 
 ## Repository Layout
 
 - `scripts/`: build, deploy, setup, and test entrypoints
 - `verification-programs/`: custom verification programs
-- `clients/`: generated TypeScript SSTS clients
 - `config/`: cluster program IDs and setup artifacts
-- `idl/`: core SSTS IDL used by generated clients
+- `idl/`: core SSTS IDL reference
 - `tests/`: test suite (`tests/e2e` contains chain-state tests)
 
 ## Requirements
@@ -96,6 +94,7 @@ CLI flags override `.env` values.
 | `npm run build`               | Build verification programs                   |
 | `npm run deploy:verification` | Deploy verification programs                  |
 | `npm run issuer:setup`        | Initialize issuer mint/config/whitelist state |
+| `npm run typecheck`           | Typecheck scripts and tests                   |
 | `npm run format`              | Format Rust verifier code                     |
 | `npm run format:check`        | Check Rust formatting                         |
 | `npm run clippy`              | Run clippy on Rust verifier code              |
@@ -105,6 +104,8 @@ CLI flags override `.env` values.
 | `npm test`                    | Run `test:unit` then `test:e2e`               |
 
 ## Testing
+
+Use `npm run typecheck` to validate TypeScript in `scripts/` and `tests/`.
 
 Use `npm run test:unit` for fast local checks that do not require deployed on-chain programs.
 
@@ -129,7 +130,6 @@ The e2e suite is split into named tests and covers:
 ## TODO
 
 - Change `config/program-ids.json` values after final program deployments.
-- Replace vendored `clients/` with published client packages once available.
 
 ## Contributing
 

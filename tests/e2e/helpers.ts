@@ -13,6 +13,7 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
+import { AccountRole } from "@solana/kit";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -21,6 +22,7 @@ import {
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
+import * as sstsClientModule from "@ssts-org/client";
 
 // Shared e2e helpers for issuer-template flows.
 // Keep these primitives reusable so new issuers can copy one file and adapt quickly.
@@ -46,6 +48,22 @@ type ProgramIdsResolved = {
   transferHookProgram: string;
   transferWhitelistProgram: string;
 };
+
+type ClientInstructionAccount = {
+  address: string;
+  role: AccountRole;
+};
+
+type ClientInstruction = {
+  accounts?: ReadonlyArray<ClientInstructionAccount>;
+  data: Uint8Array;
+  programAddress: string;
+};
+
+type ClientInstructionBuilder = (
+  input: Record<string, unknown>,
+  config?: { programAddress?: string },
+) => ClientInstruction;
 
 export const DISCRIMINATORS = {
   initializeMint: 0,
@@ -83,6 +101,36 @@ export type Scenario = {
   ataB: PublicKey;
   decimals: number;
 };
+
+function resolveClientModule(moduleObject: unknown): Record<string, unknown> {
+  const moduleRecord = moduleObject as {
+    default?: Record<string, unknown>;
+  };
+  return moduleRecord.default ?? (moduleObject as Record<string, unknown>);
+}
+
+function requireClientInstructionBuilder(exportName: string): ClientInstructionBuilder {
+  const resolved = resolveClientModule(sstsClientModule);
+  const candidate = resolved[exportName];
+  if (typeof candidate !== "function") {
+    throw new Error(`Published client export not found: ${exportName}`);
+  }
+  return candidate as ClientInstructionBuilder;
+}
+
+const getInitializeMintInstruction = requireClientInstructionBuilder(
+  "getInitializeMintInstruction",
+);
+
+const getInitializeVerificationConfigInstruction = requireClientInstructionBuilder(
+  "getInitializeVerificationConfigInstruction",
+);
+
+const getMintInstruction = requireClientInstructionBuilder("getMintInstruction");
+
+const getTransferInstruction = requireClientInstructionBuilder(
+  "getTransferInstruction",
+);
 
 function envPositiveInt(name: string, fallback: number) {
   const raw = process.env[name];
@@ -263,81 +311,47 @@ function resolvePayer(): Keypair {
   return loadKeypair(explicit ?? defaultPath);
 }
 
-function u32le(value: number) {
-  const buf = Buffer.alloc(4);
-  buf.writeUInt32LE(value, 0);
-  return buf;
-}
-
 function u64le(value: bigint) {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(value, 0);
   return buf;
 }
 
-function encodeString(value: string) {
-  const data = Buffer.from(value, "utf8");
-  return Buffer.concat([u32le(data.length), data]);
+function accountRoleIsSigner(role: AccountRole): boolean {
+  return role === AccountRole.READONLY_SIGNER || role === AccountRole.WRITABLE_SIGNER;
 }
 
-function encodeInitializeMintArgs(input: {
-  decimals: number;
-  mintAuthority: PublicKey;
-  freezeAuthority: PublicKey;
-  metadataPointer?: {
-    authority: PublicKey;
-    metadataAddress: PublicKey;
-  } | null;
-  metadata?: {
-    name: string;
-    symbol: string;
-    uri: string;
-    additionalMetadata?: Uint8Array;
-  } | null;
-}) {
-  const parts: Buffer[] = [];
-  parts.push(Buffer.from([input.decimals]));
-  parts.push(input.mintAuthority.toBuffer());
-  parts.push(input.freezeAuthority.toBuffer());
-
-  if (input.metadataPointer) {
-    parts.push(Buffer.from([1]));
-    parts.push(input.metadataPointer.authority.toBuffer());
-    parts.push(input.metadataPointer.metadataAddress.toBuffer());
-  } else {
-    parts.push(Buffer.from([0]));
-  }
-
-  if (input.metadata) {
-    const additional = input.metadata.additionalMetadata ?? new Uint8Array();
-    parts.push(Buffer.from([1]));
-    parts.push(encodeString(input.metadata.name));
-    parts.push(encodeString(input.metadata.symbol));
-    parts.push(encodeString(input.metadata.uri));
-    parts.push(
-      Buffer.concat([u32le(additional.length), Buffer.from(additional)]),
-    );
-  } else {
-    parts.push(Buffer.from([0]));
-  }
-
-  parts.push(Buffer.from([0]));
-  return Buffer.concat(parts);
+function accountRoleIsWritable(role: AccountRole): boolean {
+  return role === AccountRole.WRITABLE || role === AccountRole.WRITABLE_SIGNER;
 }
 
-function encodeInitializeVerificationConfigArgs(input: {
-  instructionDiscriminator: number;
-  cpiMode: boolean;
-  programAddresses: PublicKey[];
-}) {
-  const parts: Buffer[] = [];
-  parts.push(Buffer.from([input.instructionDiscriminator]));
-  parts.push(Buffer.from([input.cpiMode ? 1 : 0]));
-  parts.push(u32le(input.programAddresses.length));
-  for (const program of input.programAddresses) {
-    parts.push(program.toBuffer());
-  }
-  return Buffer.concat(parts);
+function toClientAddress(publicKey: PublicKey): string {
+  return publicKey.toBase58();
+}
+
+function toClientSigner(publicKey: PublicKey): {
+  address: string;
+  signTransactions<T>(transactions: readonly T[]): Promise<readonly T[]>;
+} {
+  return {
+    address: publicKey.toBase58(),
+    async signTransactions<T>(transactions: readonly T[]): Promise<readonly T[]> {
+      return transactions;
+    },
+  };
+}
+
+function toWeb3Instruction(instruction: ClientInstruction): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: new PublicKey(instruction.programAddress),
+    data: Buffer.from(instruction.data),
+    keys:
+      instruction.accounts?.map((account) => ({
+        pubkey: new PublicKey(account.address),
+        isSigner: accountRoleIsSigner(account.role),
+        isWritable: accountRoleIsWritable(account.role),
+      })) ?? [],
+  });
 }
 
 async function ensureProgramExecutable(
@@ -497,45 +511,36 @@ export function buildSstsTransferIx(
     contextEntry?: PublicKey;
   },
 ) {
-  // Security Token `Transfer` instruction account layout.
-  // Optional whitelist context can be appended when a verifier expects it.
+  // Build SSTS transfer via the published generated client, then optionally append
+  // whitelist context accounts used by verifier tests.
   const amount = options?.amount ?? 1n;
   const destination = options?.destination ?? scenario.ataB;
-  const keys = [
-    { pubkey: scenario.mint.publicKey, isSigner: false, isWritable: false },
-    {
-      pubkey: scenario.verificationConfigTransferPda,
-      isSigner: false,
-      isWritable: false,
-    },
-    {
-      pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
-      isSigner: false,
-      isWritable: false,
-    },
-    {
-      pubkey: scenario.permanentDelegatePda,
-      isSigner: false,
-      isWritable: false,
-    },
-    { pubkey: scenario.mint.publicKey, isSigner: false, isWritable: false },
-    { pubkey: scenario.ataA, isSigner: false, isWritable: true },
-    { pubkey: destination, isSigner: false, isWritable: true },
-    {
-      pubkey: scenario.transferHookProgramId,
-      isSigner: false,
-      isWritable: false,
-    },
-    { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
-  ];
+
+  const transferIx = toWeb3Instruction(
+    getTransferInstruction(
+      {
+        mint: toClientAddress(scenario.mint.publicKey),
+        verificationConfig: toClientAddress(scenario.verificationConfigTransferPda),
+        instructionsSysvar: toClientAddress(SYSVAR_INSTRUCTIONS_PUBKEY),
+        permanentDelegateAuthority: toClientAddress(scenario.permanentDelegatePda),
+        mintAccount: toClientAddress(scenario.mint.publicKey),
+        fromTokenAccount: toClientAddress(scenario.ataA),
+        toTokenAccount: toClientAddress(destination),
+        transferHookProgram: toClientAddress(scenario.transferHookProgramId),
+        tokenProgram: toClientAddress(TOKEN_2022_PROGRAM_ID),
+        amount,
+      },
+      { programAddress: toClientAddress(scenario.securityProgramId) },
+    ),
+  );
 
   if (options?.includeContext) {
-    keys.push({
+    transferIx.keys.push({
       pubkey: options.contextConfig ?? scenario.whitelistConfigPda,
       isSigner: false,
       isWritable: false,
     });
-    keys.push({
+    transferIx.keys.push({
       pubkey:
         options.contextEntry ??
         deriveWhitelistEntryPda(
@@ -546,18 +551,14 @@ export function buildSstsTransferIx(
       isSigner: false,
       isWritable: false,
     });
-    keys.push({
+    transferIx.keys.push({
       pubkey: scenario.whitelistProgramId,
       isSigner: false,
       isWritable: false,
     });
   }
 
-  return new TransactionInstruction({
-    programId: scenario.securityProgramId,
-    data: Buffer.concat([Buffer.from([DISCRIMINATORS.transfer]), u64le(amount)]),
-    keys,
-  });
+  return transferIx;
 }
 
 export function buildIntrospectionVerificationIx(
@@ -814,36 +815,37 @@ export async function createScenario(mode: VerificationMode): Promise<Scenario> 
   );
 
   // 3) Initialize mint with metadata and transfer-hook compatible extensions.
-  const initMintData = Buffer.concat([
-    Buffer.from([DISCRIMINATORS.initializeMint]),
-    encodeInitializeMintArgs({
-      decimals,
-      mintAuthority: payer.publicKey,
-      freezeAuthority: freezeAuthorityPda,
-      metadataPointer: {
-        authority: payer.publicKey,
-        metadataAddress: mint.publicKey,
+  const initMintIx = toWeb3Instruction(
+    getInitializeMintInstruction(
+      {
+        mint: toClientSigner(mint.publicKey),
+        authority: toClientAddress(mintAuthorityPda),
+        payer: toClientSigner(payer.publicKey),
+        tokenProgram: toClientAddress(TOKEN_2022_PROGRAM_ID),
+        systemProgram: toClientAddress(SystemProgram.programId),
+        rentSysvar: toClientAddress(SYSVAR_RENT_PUBKEY),
+        initializeMintArgs: {
+          ixMint: {
+            decimals,
+            mintAuthority: toClientAddress(payer.publicKey),
+            freezeAuthority: toClientAddress(freezeAuthorityPda),
+          },
+          ixMetadataPointer: {
+            authority: toClientAddress(payer.publicKey),
+            metadataAddress: toClientAddress(mint.publicKey),
+          },
+          ixMetadata: {
+            name: process.env.TOKEN_NAME ?? "SSTS Example",
+            symbol: process.env.TOKEN_SYMBOL ?? "SSTS",
+            uri: process.env.TOKEN_URI ?? "https://example.com/metadata.json",
+            additionalMetadata: new Uint8Array(),
+          },
+          ixScaledUiAmount: null,
+        },
       },
-      metadata: {
-        name: process.env.TOKEN_NAME ?? "SSTS Example",
-        symbol: process.env.TOKEN_SYMBOL ?? "SSTS",
-        uri: process.env.TOKEN_URI ?? "https://example.com/metadata.json",
-      },
-    }),
-  ]);
-
-  const initMintIx = new TransactionInstruction({
-    programId: securityProgramId,
-    data: initMintData,
-    keys: [
-      { pubkey: mint.publicKey, isSigner: true, isWritable: true },
-      { pubkey: mintAuthorityPda, isSigner: false, isWritable: true },
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
-    ],
-  });
+      { programAddress: toClientAddress(securityProgramId) },
+    ),
+  );
   await sendTx(connection, payer, [initMintIx], [mint]);
 
   // 4) Create token accounts used as sender and receiver in tests.
@@ -863,59 +865,52 @@ export async function createScenario(mode: VerificationMode): Promise<Scenario> 
   // 5) Configure verification:
   // - Mint uses CPI mode for simplicity.
   // - Transfer mode is selected by test scenario (introspection or cpi).
-  const initMintConfigData = Buffer.concat([
-    Buffer.from([DISCRIMINATORS.initializeVerificationConfig]),
-    encodeInitializeVerificationConfigArgs({
-      instructionDiscriminator: DISCRIMINATORS.mint,
-      cpiMode: true,
-      programAddresses: [whitelistProgramId],
-    }),
-  ]);
-
-  const initMintConfigIx = new TransactionInstruction({
-    programId: securityProgramId,
-    data: initMintConfigData,
-    keys: [
-      { pubkey: mint.publicKey, isSigner: false, isWritable: false },
-      { pubkey: mintAuthorityPda, isSigner: false, isWritable: false },
-      { pubkey: payer.publicKey, isSigner: true, isWritable: false },
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: mint.publicKey, isSigner: false, isWritable: false },
-      { pubkey: verificationConfigMintPda, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-  });
+  const initMintConfigIx = toWeb3Instruction(
+    getInitializeVerificationConfigInstruction(
+      {
+        mint: toClientAddress(mint.publicKey),
+        verificationConfigOrMintAuthority: toClientAddress(mintAuthorityPda),
+        instructionsSysvarOrCreator: toClientAddress(payer.publicKey),
+        payer: toClientSigner(payer.publicKey),
+        mintAccount: toClientAddress(mint.publicKey),
+        configAccount: toClientAddress(verificationConfigMintPda),
+        systemProgram: toClientAddress(SystemProgram.programId),
+        accountMetasPda: toClientAddress(accountMetasPda),
+        transferHookPda: toClientAddress(transferHookPda),
+        transferHookProgram: toClientAddress(transferHookProgramId),
+        initializeVerificationConfigArgs: {
+          instructionDiscriminator: DISCRIMINATORS.mint,
+          cpiMode: true,
+          programAddresses: [toClientAddress(whitelistProgramId)],
+        },
+      },
+      { programAddress: toClientAddress(securityProgramId) },
+    ),
+  );
   await sendTx(connection, payer, [initMintConfigIx]);
 
-  const initTransferConfigData = Buffer.concat([
-    Buffer.from([DISCRIMINATORS.initializeVerificationConfig]),
-    encodeInitializeVerificationConfigArgs({
-      instructionDiscriminator: DISCRIMINATORS.transfer,
-      cpiMode: mode === "cpi",
-      programAddresses: [whitelistProgramId],
-    }),
-  ]);
-
-  const initTransferConfigIx = new TransactionInstruction({
-    programId: securityProgramId,
-    data: initTransferConfigData,
-    keys: [
-      { pubkey: mint.publicKey, isSigner: false, isWritable: false },
-      { pubkey: mintAuthorityPda, isSigner: false, isWritable: false },
-      { pubkey: payer.publicKey, isSigner: true, isWritable: false },
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: mint.publicKey, isSigner: false, isWritable: false },
+  const initTransferConfigIx = toWeb3Instruction(
+    getInitializeVerificationConfigInstruction(
       {
-        pubkey: verificationConfigTransferPda,
-        isSigner: false,
-        isWritable: true,
+        mint: toClientAddress(mint.publicKey),
+        verificationConfigOrMintAuthority: toClientAddress(mintAuthorityPda),
+        instructionsSysvarOrCreator: toClientAddress(payer.publicKey),
+        payer: toClientSigner(payer.publicKey),
+        mintAccount: toClientAddress(mint.publicKey),
+        configAccount: toClientAddress(verificationConfigTransferPda),
+        systemProgram: toClientAddress(SystemProgram.programId),
+        accountMetasPda: toClientAddress(accountMetasPda),
+        transferHookPda: toClientAddress(transferHookPda),
+        transferHookProgram: toClientAddress(transferHookProgramId),
+        initializeVerificationConfigArgs: {
+          instructionDiscriminator: DISCRIMINATORS.transfer,
+          cpiMode: mode === "cpi",
+          programAddresses: [toClientAddress(whitelistProgramId)],
+        },
       },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: accountMetasPda, isSigner: false, isWritable: true },
-      { pubkey: transferHookPda, isSigner: false, isWritable: false },
-      { pubkey: transferHookProgramId, isSigner: false, isWritable: false },
-    ],
-  });
+      { programAddress: toClientAddress(securityProgramId) },
+    ),
+  );
   await sendTx(connection, payer, [initTransferConfigIx]);
 
   // 6) Initialize whitelist storage for this mint.
@@ -932,23 +927,25 @@ export async function createScenario(mode: VerificationMode): Promise<Scenario> 
   await sendTx(connection, payer, [initWhitelistIx]);
 
   // 7) Mint initial supply to investor A for transfer assertions.
-  const mintIx = new TransactionInstruction({
-    programId: securityProgramId,
-    data: Buffer.concat([Buffer.from([DISCRIMINATORS.mint]), u64le(1_000n)]),
-    keys: [
-      { pubkey: mint.publicKey, isSigner: false, isWritable: false },
-      { pubkey: verificationConfigMintPda, isSigner: false, isWritable: false },
+  const mintIx = toWeb3Instruction(
+    getMintInstruction(
       {
-        pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
-        isSigner: false,
-        isWritable: false,
+        mint: toClientAddress(mint.publicKey),
+        verificationConfig: toClientAddress(verificationConfigMintPda),
+        instructionsSysvar: toClientAddress(SYSVAR_INSTRUCTIONS_PUBKEY),
+        mintAuthority: toClientAddress(mintAuthorityPda),
+        mintAccount: toClientAddress(mint.publicKey),
+        destination: toClientAddress(ataA),
+        tokenProgram: toClientAddress(TOKEN_2022_PROGRAM_ID),
+        amount: 1_000n,
       },
-      { pubkey: mintAuthorityPda, isSigner: false, isWritable: false },
-      { pubkey: mint.publicKey, isSigner: false, isWritable: true },
-      { pubkey: ataA, isSigner: false, isWritable: true },
-      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: whitelistProgramId, isSigner: false, isWritable: false },
-    ],
+      { programAddress: toClientAddress(securityProgramId) },
+    ),
+  );
+  mintIx.keys.push({
+    pubkey: whitelistProgramId,
+    isSigner: false,
+    isWritable: false,
   });
   await sendTx(connection, payer, [mintIx]);
 

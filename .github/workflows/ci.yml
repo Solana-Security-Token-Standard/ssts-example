@@ -72,5 +72,8 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: Run Typecheck
+        run: npm run typecheck
+
       - name: Run Unit Tests
         run: npm run test:unit
